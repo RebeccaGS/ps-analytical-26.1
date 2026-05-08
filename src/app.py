@@ -17,14 +17,15 @@ st.write("Esse painel tem como objetivo ajudar agentes de segurança pública a 
 
 #abrir os arquivos
 
-path_data = os.path.join("../data")
-path_shape = os.path.join("../data", "shapes", "lm_cisp_bd.shp")
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+path_data = os.path.join(BASE_DIR, "data")
+path_shape = os.path.join(BASE_DIR, "data", "shapes", "lm_cisp_bd.shp") #correçao do caminho, base dir vai pra ps-analytical
 
 @st.cache_data #carrega o dataset com as infos de crime
 def carregar_crimes(path_data):
-    df_delegacia = pd.read_csv(f"{path_data}/delegacia.csv", encoding="iso-8859-1", sep=';')
-
     colunas_delegacia = ['cisp', 'mes', 'ano', 'roubo_em_coletivo', 'risp']
+    df_delegacia = pd.read_csv(f"{path_data}/delegacia.csv", encoding="iso-8859-1", sep=';', usecols=colunas_delegacia)
 
     crimes_interesse = df_delegacia[colunas_delegacia].copy()
 
@@ -58,14 +59,11 @@ def preparar_crimes_por_cisp(crimes_interesse, ano, mes):
 
 @st.cache_data
 def carregar_onibus(path_data): #aqui carregamos as infos dos onibus(linhas, numero, etc)
-    df_rotas = pd.read_csv(f"{path_data}/routes.csv")
-    df_trips = pd.read_parquet(f"{path_data}/trips")
-
     colunas_rotas = ['route_id', 'route_short_name', 'route_long_name']
-    rotas_interesse = df_rotas[colunas_rotas]
-
+    rotas_interesse = pd.read_csv(f"{path_data}/routes.csv", usecols=colunas_rotas )
     colunas_trips = ['route_id', 'trip_headsign', 'trip_short_name', 'direction_id', 'shape_id']
-    trips_interesse = df_trips[colunas_trips]
+    trips_interesse = pd.read_parquet(f"{path_data}/trips", usecols=colunas_trips)
+
 
     infos_dos_bus_com_duplicatas = rotas_interesse.merge(trips_interesse, on='route_id')
     infos_dos_bus = infos_dos_bus_com_duplicatas.drop_duplicates(subset=['route_id', 'direction_id']).copy()
@@ -141,6 +139,8 @@ def risco(mapa_final):
 
     return risco_por_linha
 
+
+
 #Opçoes do usuario - lista de opcoes + opcao de nao marcar mes para exibir o ano todo
 ano_escolhido = st.sidebar.selectbox(
     "Ano",
@@ -166,6 +166,7 @@ meses = {
 mes_nome = st.sidebar.selectbox("Mês", list(meses.keys()))
 mes_escolhido = meses[mes_nome]
 
+esconder_linhas = st.checkbox("Esconder linhas de onibus")
 #Abrindo arquivos...
 
 crimes_interesse = carregar_crimes(path_data)
@@ -182,20 +183,37 @@ mapa_com_linhas = cruzar_linhas_cisp(linhas_onibus_geo, mapa_cisp_final)
 
 risco_por_linha = risco(mapa_com_linhas)
 
-aba_mapa, aba_geral, aba_linha, aba_ranking, aba_metodologia = st.tabs(
+aba_mapa, aba_ranking, aba_metodologia, aba_comparativo = st.tabs(
     [
         "Mapa",
-        "Geral",
-        "Análise por Linha",
         "Ranking",
-        "Metodologia"
+        "Metodologia",
+        "Comparativo entre Linhas"
     ]
 )
 
+linhas_disponiveis = sorted(linhas_onibus_geo["numero"].dropna().unique())
+
+linha_escolhida = st.sidebar.selectbox(
+    "Escolha uma linha de ônibus",
+    linhas_disponiveis
+)
+
+linha_a_exibir = linhas_onibus_geo[
+    linhas_onibus_geo["numero"] == linha_escolhida
+].copy()
+
+ida = linha_a_exibir[linha_a_exibir["ida"] == 1].copy()
+volta = linha_a_exibir[linha_a_exibir["volta"] == 1].copy()
+
+
+#Ponto de chegada
+#ponto de partida
+#Escolha uma linha de onibus
 
 with aba_mapa:
     st.header("Mapa de calor sobre roubos em coletivos por CISP")
-    if(mes_escolhido == 0):
+    if mes_escolhido == 0:
         st.write(f"Mapa das áreas de CISP em {ano_escolhido}")
     else:
         st.write(f"Mapa das áreas de CISP em {mes_escolhido}/{ano_escolhido}")
@@ -221,10 +239,108 @@ with aba_mapa:
         legend_name="Roubos em coletivo"
     ).add_to(mapa)
 
-    folium.GeoJson(
+    folium.GeoJson( #Camada invisivel
         mapa_cisp_folium,
         name="Informações da CISP",
+        style_function=lambda feature: {    #pega o limite das regioes para mostrar a box
+            "fillColor": "transparent",
+            "color": "black",
+            "weight": 0.7,
+            "fillOpacity": 0,
+        },
+        tooltip=folium.GeoJsonTooltip(
+        fields=["cisp", "roubo_em_coletivo"],
+        aliases=["CISP:", "Roubos em coletivo:"],
+        localize=True,
+        sticky=True,
+        labels=True
+        )
+    ).add_to(mapa)
+
+    if not esconder_linhas:
+        folium.GeoJson(
+            linhas_onibus_geo,
+            name=f"Linha {linhas_disponiveis} - Ida",
+            style_function=lambda feature: {
+                "color": "black",
+                "weight": 1,
+                "opacity": 0.3,
+            },
+            tooltip=folium.GeoJsonTooltip(
+                fields=["numero", "nome"],
+                aliases=["Linha:", "Destino:"],
+                sticky=True,
+                labels=True
+            )
+        ).add_to(mapa)
+
+    ida_folium = ida.to_crs(epsg=4326)
+    volta_folium = volta.to_crs(epsg=4326)
+
+    folium.GeoJson(
+        ida_folium,
+        name=f"Linha {linha_escolhida} - Ida",
         style_function=lambda feature: {
+            "color": "blue",
+            "weight": 4,
+            "opacity": 0.8,
+        },
+        tooltip=folium.GeoJsonTooltip(
+            fields=["numero", "nome"],
+            aliases=["Linha:", "Destino:"],
+            sticky=True,
+            labels=True
+        )
+    ).add_to(mapa)
+
+    folium.GeoJson(
+        volta_folium,
+        name=f"Linha {linha_escolhida} - Volta",
+        style_function=lambda feature: {
+            "color": "green",
+            "weight": 4,
+            "opacity": 0.8,
+        },
+        tooltip=folium.GeoJsonTooltip(
+            fields=["numero", "nome"],
+            aliases=["Linha:", "Destino:"],
+            sticky=True,
+            labels=True
+        )
+    ).add_to(mapa)
+
+    st_folium(
+        mapa,
+        width=900,
+        height=600
+    )
+
+#with aba_comparativo:
+    mapa_cisp_folium = mapa_cisp_final.to_crs(epsg=4326)
+
+    centro = mapa_cisp_folium.geometry.unary_union.centroid
+
+    mapa = folium.Map(
+        location=[centro.y, centro.x],
+        zoom_start=11,
+        tiles="CartoDB positron"
+    )
+
+    folium.Choropleth(
+        geo_data=mapa_cisp_folium,
+        data=mapa_cisp_folium,
+        columns=["cisp", "roubo_em_coletivo"],
+        key_on="feature.properties.cisp",
+        fill_color="Reds",
+        fill_opacity=0.7,
+        line_opacity=0.4,
+        legend_name="Roubos em coletivo"
+    ).add_to(mapa)
+
+    folium.GeoJson(  # Camada invisivel
+        mapa_cisp_folium,
+        name="Informações da CISP",
+        style_function=lambda feature: {  # pega o limite das regioes para mostrar a box
             "fillColor": "transparent",
             "color": "black",
             "weight": 0.7,
@@ -239,13 +355,6 @@ with aba_mapa:
         )
     ).add_to(mapa)
 
-    st_folium(
-        mapa,
-        width=900,
-        height=600
-    )
-#with aba_geral:
-
 
 
 #with aba_linha:
@@ -256,6 +365,7 @@ with aba_mapa:
 #with aba_ranking:
     st.header("Ranking de Linhas")
 
+    print(linhas_onibus_geo)
 
 
 #with aba_metodologia:
