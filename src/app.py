@@ -8,6 +8,7 @@ import streamlit as st
 import folium
 from streamlit_folium import st_folium
 
+
 #interface inicial
 
 st.set_page_config(page_title='Painel de Risco no Transporte Coletivo no Rio de Janeiro',
@@ -62,7 +63,7 @@ def carregar_onibus(path_data): #aqui carregamos as infos dos onibus(linhas, num
     colunas_rotas = ['route_id', 'route_short_name', 'route_long_name']
     rotas_interesse = pd.read_csv(f"{path_data}/routes.csv", usecols=colunas_rotas )
     colunas_trips = ['route_id', 'trip_headsign', 'trip_short_name', 'direction_id', 'shape_id']
-    trips_interesse = pd.read_parquet(f"{path_data}/trips", usecols=colunas_trips)
+    trips_interesse = pd.read_parquet(f"{path_data}/trips", columns=colunas_trips)
 
 
     infos_dos_bus_com_duplicatas = rotas_interesse.merge(trips_interesse, on='route_id')
@@ -111,21 +112,23 @@ def carregar_linhas(path_data, infos_dos_bus):
 
     return linhas_onibus_geo
 
-#nao permitiu cache...
-def cruzar_linhas_cisp(linhas_onibus_geo, mapa_cisp_final):
-        mapa_final_duplicado = gpd.sjoin(
-            linhas_onibus_geo,
-            mapa_cisp_final,
-            predicate="intersects"
-        )
+@st.cache_data
+def criar_base_espacial(_linhas_onibus_geo, path_shape):
+    mapa_cisp_puro = gpd.read_file(path_shape)
+    mapa_cisp_puro['cisp'] = pd.to_numeric(mapa_cisp_puro['cisp'], errors='coerce')
 
-        mapa_final = mapa_final_duplicado.drop_duplicates(
-            subset=["route_id", "ida", "volta", "cisp"]
-        )
+    intersecao = gpd.sjoin(linhas_onibus_geo, mapa_cisp_puro, predicate="intersects")
 
-        return mapa_final
+    intersecao = intersecao.drop_duplicates(subset=['route_id', 'ida','volta','cisp'])
 
-#nao permitiu cache...
+    return intersecao[['route_id', 'ida', 'volta', 'numero', 'cisp']]
+
+@st.cache_data
+def carregar_stop(path_data):
+    stops = pd.read_parquet(f"{path_data}/stops.parquet")
+    return stops
+
+@st.cache_data
 def risco(mapa_final):
     risco_por_linha = mapa_final.groupby(['route_id', 'ida', 'volta', 'numero'], as_index=False)['roubo_em_coletivo'].sum()
 
@@ -147,26 +150,25 @@ ano_escolhido = st.sidebar.selectbox(
     [2022, 2023, 2024, 2025, 2026]
 )
 
-meses = {
-    "Todos": 0,
-    "Janeiro": 1,
-    "Fevereiro": 2,
-    "Março": 3,
-    "Abril": 4,
-    "Maio": 5,
-    "Junho": 6,
-    "Julho": 7,
-    "Agosto": 8,
-    "Setembro": 9,
-    "Outubro": 10,
-    "Novembro": 11,
-    "Dezembro": 12
+
+meses_completos = {
+    "Todos": 0, "Janeiro": 1, "Fevereiro": 2, "Março": 3, "Abril": 4,
+    "Maio": 5, "Junho": 6, "Julho": 7, "Agosto": 8, "Setembro": 9,
+    "Outubro": 10, "Novembro": 11, "Dezembro": 12
 }
 
-mes_nome = st.sidebar.selectbox("Mês", list(meses.keys()))
-mes_escolhido = meses[mes_nome]
+
+if ano_escolhido == 2026:
+    opcoes_meses = ["Todos", "Janeiro", "Fevereiro", "Março"]
+else:
+    opcoes_meses = list(meses_completos.keys())
+
+
+mes_nome = st.sidebar.selectbox("Mês", opcoes_meses)
+mes_escolhido = meses_completos[mes_nome]
 
 esconder_linhas = st.checkbox("Esconder linhas de onibus")
+
 #Abrindo arquivos...
 
 crimes_interesse = carregar_crimes(path_data)
@@ -175,43 +177,48 @@ crimes_por_cisp_ordenado = preparar_crimes_por_cisp(crimes_interesse, ano_escolh
 
 infos_dos_bus = carregar_onibus(path_data)
 
+stops = carregar_stop(path_data)
+
 mapa_cisp_final = carregar_mapa(path_shape, crimes_por_cisp_ordenado)
 
 linhas_onibus_geo = carregar_linhas(path_data, infos_dos_bus)
 
-mapa_com_linhas = cruzar_linhas_cisp(linhas_onibus_geo, mapa_cisp_final)
+base = criar_base_espacial(linhas_onibus_geo, path_shape)
+
+mapa_com_linhas = base.merge(crimes_por_cisp_ordenado, on='cisp', how='left')
+mapa_com_linhas['roubo_em_coletivo'] = mapa_com_linhas['roubo_em_coletivo'].fillna(0)
 
 risco_por_linha = risco(mapa_com_linhas)
 
-aba_mapa, aba_ranking, aba_metodologia, aba_comparativo = st.tabs(
-    [
-        "Mapa",
-        "Ranking",
-        "Metodologia",
-        "Comparativo entre Linhas"
-    ]
-)
+col_mapa, col_info = st.columns([8, 2], gap="large")
 
 linhas_disponiveis = sorted(linhas_onibus_geo["numero"].dropna().unique())
 
 linha_escolhida = st.sidebar.selectbox(
     "Escolha uma linha de ônibus",
-    linhas_disponiveis
+    ["Selecione uma linha"] + linhas_disponiveis
 )
 
-linha_a_exibir = linhas_onibus_geo[
-    linhas_onibus_geo["numero"] == linha_escolhida
-].copy()
+linha_foi_escolhida = linha_escolhida != "Selecione uma linha"
 
-ida = linha_a_exibir[linha_a_exibir["ida"] == 1].copy()
-volta = linha_a_exibir[linha_a_exibir["volta"] == 1].copy()
+if linha_foi_escolhida:
+    sentido_escolhido = st.sidebar.selectbox(
+        "Escolha o sentido",
+        ["Ambos os sentidos", "Ida", "Volta"]
+    )
 
+    linha_a_exibir = linhas_onibus_geo[
+        linhas_onibus_geo["numero"] == linha_escolhida
+    ].copy()
+
+    ida = linha_a_exibir[linha_a_exibir["ida"] == 1].copy()
+    volta = linha_a_exibir[linha_a_exibir["volta"] == 1].copy()
 
 #Ponto de chegada
 #ponto de partida
 #Escolha uma linha de onibus
 
-with aba_mapa:
+with col_mapa:
     st.header("Mapa de calor sobre roubos em coletivos por CISP")
     if mes_escolhido == 0:
         st.write(f"Mapa das áreas de CISP em {ano_escolhido}")
@@ -220,7 +227,7 @@ with aba_mapa:
 
     mapa_cisp_folium = mapa_cisp_final.to_crs(epsg=4326)
 
-    centro = mapa_cisp_folium.geometry.unary_union.centroid
+    centro = mapa_cisp_folium.geometry.union_all().centroid
 
     mapa = folium.Map(
         location=[centro.y, centro.x],
@@ -274,122 +281,64 @@ with aba_mapa:
             )
         ).add_to(mapa)
 
-    ida_folium = ida.to_crs(epsg=4326)
-    volta_folium = volta.to_crs(epsg=4326)
 
-    folium.GeoJson(
-        ida_folium,
-        name=f"Linha {linha_escolhida} - Ida",
-        style_function=lambda feature: {
-            "color": "blue",
-            "weight": 4,
-            "opacity": 0.8,
-        },
-        tooltip=folium.GeoJsonTooltip(
-            fields=["numero", "nome"],
-            aliases=["Linha:", "Destino:"],
-            sticky=True,
-            labels=True
-        )
-    ).add_to(mapa)
-
-    folium.GeoJson(
-        volta_folium,
-        name=f"Linha {linha_escolhida} - Volta",
-        style_function=lambda feature: {
-            "color": "green",
-            "weight": 4,
-            "opacity": 0.8,
-        },
-        tooltip=folium.GeoJsonTooltip(
-            fields=["numero", "nome"],
-            aliases=["Linha:", "Destino:"],
-            sticky=True,
-            labels=True
-        )
-    ).add_to(mapa)
+    if linha_foi_escolhida:
+        if sentido_escolhido in ['Ambos os sentidos', 'Ida'] and not ida.empty:
+            folium.GeoJson(
+                ida,
+                name=f"Linha {linha_escolhida} - Ida",
+                style_function=lambda feature: {
+                    "color": "blue",
+                    "weight": 4,
+                    "opacity": 0.8,
+                },
+                tooltip=folium.GeoJsonTooltip(
+                    fields=["numero", "nome"],
+                    aliases=["Linha:", "Destino:"],
+                    sticky=True,
+                    labels=True
+                )
+            ).add_to(mapa)
+        if sentido_escolhido in ['Ambos os sentidos', 'Volta'] and not volta.empty:
+            folium.GeoJson(
+                volta,
+                name=f"Linha {linha_escolhida} - Volta",
+                style_function=lambda feature: {
+                    "color": "green",
+                    "weight": 4,
+                    "opacity": 0.8,
+                },
+                tooltip=folium.GeoJsonTooltip(
+                    fields=["numero", "nome"],
+                    aliases=["Linha:", "Destino:"],
+                    sticky=True,
+                    labels=True
+                )
+            ).add_to(mapa)
 
     st_folium(
         mapa,
-        width=900,
-        height=600
+        width=1100,
+        height=800
     )
 
-#with aba_comparativo:
-    mapa_cisp_folium = mapa_cisp_final.to_crs(epsg=4326)
+with col_info:
+    st.subheader("Análise do risco associado à linha")
+    if linha_foi_escolhida:
+        dados_linha = risco_por_linha[risco_por_linha['numero'] == linha_escolhida]
+        print(dados_linha)
+        if not dados_linha.empty:
+            nota = dados_linha['nota_risco'].values[0]
+            total_roubos = dados_linha['exposicao_roubo_total'].values[0]
 
-    centro = mapa_cisp_folium.geometry.unary_union.centroid
+            st.write(f"Linha selecionada: {linha_escolhida}")
+            st.metric(label="Nível de Risco(1 a 5)", value = int(nota))
+            st.metric(label="Exposição total de roubos nas CISPs da Rota: ", value=int(total_roubos))
 
-    mapa = folium.Map(
-        location=[centro.y, centro.x],
-        zoom_start=11,
-        tiles="CartoDB positron"
-    )
+            st.write("A nota de risco foi calculada fazendo o somatório de roubos a coletivos registrados nas CISPs por onde a linha de ônibus passa durante todo o seu trajeto.")
 
-    folium.Choropleth(
-        geo_data=mapa_cisp_folium,
-        data=mapa_cisp_folium,
-        columns=["cisp", "roubo_em_coletivo"],
-        key_on="feature.properties.cisp",
-        fill_color="Reds",
-        fill_opacity=0.7,
-        line_opacity=0.4,
-        legend_name="Roubos em coletivo"
-    ).add_to(mapa)
+        else:
+            st.warning("Não há dados para essa rota!")
 
-    folium.GeoJson(  # Camada invisivel
-        mapa_cisp_folium,
-        name="Informações da CISP",
-        style_function=lambda feature: {  # pega o limite das regioes para mostrar a box
-            "fillColor": "transparent",
-            "color": "black",
-            "weight": 0.7,
-            "fillOpacity": 0,
-        },
-        tooltip=folium.GeoJsonTooltip(
-            fields=["cisp", "roubo_em_coletivo"],
-            aliases=["CISP:", "Roubos em coletivo:"],
-            localize=True,
-            sticky=True,
-            labels=True
-        )
-    ).add_to(mapa)
-
-
-
-#with aba_linha:
-    st.header("Análise por Linha de Ônibus")
-
-
-
-#with aba_ranking:
-    st.header("Ranking de Linhas")
-
-    print(linhas_onibus_geo)
-
-
-#with aba_metodologia:
-    st.header("Metodologia")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    else:
+        st.write("Selecione uma linha de onibus no menu para obter o risco associado")
