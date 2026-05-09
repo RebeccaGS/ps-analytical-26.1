@@ -172,8 +172,6 @@ crimes_por_cisp_ordenado = preparar_crimes_por_cisp(crimes_interesse, ano_escolh
 
 infos_dos_bus = carregar_onibus(path_data)
 
-stops = carregar_stop(path_data)
-
 mapa_cisp_final = carregar_mapa(path_shape, crimes_por_cisp_ordenado)
 
 linhas_onibus_geo = carregar_linhas(path_data, infos_dos_bus)
