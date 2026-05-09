@@ -124,11 +124,6 @@ def criar_base_espacial(_linhas_onibus_geo, path_shape):
     return intersecao[['route_id', 'ida', 'volta', 'numero', 'cisp']]
 
 @st.cache_data
-def carregar_stop(path_data):
-    stops = pd.read_parquet(f"{path_data}/stops.parquet")
-    return stops
-
-@st.cache_data
 def risco(mapa_final):
     risco_por_linha = mapa_final.groupby(['route_id', 'ida', 'volta', 'numero'], as_index=False)['roubo_em_coletivo'].sum()
 
@@ -190,7 +185,7 @@ mapa_com_linhas['roubo_em_coletivo'] = mapa_com_linhas['roubo_em_coletivo'].fill
 
 risco_por_linha = risco(mapa_com_linhas)
 
-col_mapa, col_info = st.columns([8, 2], gap="large")
+col_mapa, col_info, col_vazia = st.columns([6, 3, 1], gap="small")
 
 linhas_disponiveis = sorted(linhas_onibus_geo["numero"].dropna().unique())
 
@@ -323,7 +318,7 @@ with col_mapa:
     )
 
 with col_info:
-    st.subheader("Análise do risco associado à linha")
+    st.subheader("Análise do risco associado à linha no período escolhido")
     if linha_foi_escolhida:
         dados_linha = risco_por_linha[risco_por_linha['numero'] == linha_escolhida]
         print(dados_linha)
