@@ -142,7 +142,8 @@ def risco(mapa_final):
 #Opçoes do usuario - lista de opcoes + opcao de nao marcar mes para exibir o ano todo
 ano_escolhido = st.sidebar.selectbox(
     "Ano",
-    [2022, 2023, 2024, 2025, 2026]
+    [2022, 2023, 2024, 2025, 2026],
+    key='select_ano'
 )
 
 
@@ -159,10 +160,10 @@ else:
     opcoes_meses = list(meses_completos.keys())
 
 
-mes_nome = st.sidebar.selectbox("Mês", opcoes_meses)
+mes_nome = st.sidebar.selectbox("Mês", opcoes_meses, key='select_mes')
 mes_escolhido = meses_completos[mes_nome]
 
-esconder_linhas = st.checkbox("Esconder linhas de onibus")
+esconder_linhas = st.checkbox("Esconder linhas de onibus", key='checkbox_esconder_linhas')
 
 #Abrindo arquivos...
 
@@ -188,16 +189,18 @@ col_mapa, col_info, col_vazia = st.columns([6, 3, 1], gap="small")
 linhas_disponiveis = sorted(linhas_onibus_geo["numero"].dropna().unique())
 
 linha_escolhida = st.sidebar.selectbox(
-    "Escolha uma linha de ônibus",
-    ["Selecione uma linha"] + linhas_disponiveis
+    "Escolha a primeira linha de ônibus",
+    ["Selecione uma linha"] + linhas_disponiveis,
+    key='select_primeira_linha'
 )
 
 linha_foi_escolhida = linha_escolhida != "Selecione uma linha"
 
 if linha_foi_escolhida:
     sentido_escolhido = st.sidebar.selectbox(
-        "Escolha o sentido",
-        ["Ambos os sentidos", "Ida", "Volta"]
+        "Escolha o sentido da primeira linha",
+        ["Ambos os sentidos", "Ida", "Volta"],
+        key='select_sentido_primeira_linha'
     )
 
     linha_a_exibir = linhas_onibus_geo[
@@ -206,6 +209,27 @@ if linha_foi_escolhida:
 
     ida = linha_a_exibir[linha_a_exibir["ida"] == 1].copy()
     volta = linha_a_exibir[linha_a_exibir["volta"] == 1].copy()
+
+linha_escolhida2 = st.sidebar.selectbox(
+    "Escolha a segunda linha de ônibus",
+    ["Selecione uma linha"] + linhas_disponiveis,
+    key='select_segunda_linha'
+)
+linha_foi_escolhida2 = linha_escolhida2 != "Selecione uma linha"
+
+if linha_foi_escolhida2:
+    sentido_escolhido2 = st.sidebar.selectbox(
+        "Escolha o sentido da segunda linha",
+        ["Ambos os sentidos", "Ida", "Volta"],
+        key='select_sentido_segunda_linha'
+    )
+
+    linha_a_exibir2 = linhas_onibus_geo[
+        linhas_onibus_geo["numero"] == linha_escolhida2
+    ].copy()
+
+    ida2 = linha_a_exibir2[linha_a_exibir2["ida"] == 1].copy()
+    volta2 = linha_a_exibir2[linha_a_exibir2["volta"] == 1].copy()
 
 #Ponto de chegada
 #ponto de partida
@@ -308,7 +332,39 @@ with col_mapa:
                     labels=True
                 )
             ).add_to(mapa)
-
+    if linha_foi_escolhida2:
+        if sentido_escolhido2 in ['Ambos os sentidos', 'Ida'] and not ida2.empty:
+            folium.GeoJson(
+                ida2,
+                name=f"Linha {linha_escolhida2} - Ida",
+                style_function=lambda feature: {
+                    "color": "blue",
+                    "weight": 4,
+                    "opacity": 0.8,
+                },
+                tooltip=folium.GeoJsonTooltip(
+                    fields=["numero", "nome"],
+                    aliases=["Linha:", "Destino:"],
+                    sticky=True,
+                    labels=True
+                )
+            ).add_to(mapa)
+        if sentido_escolhido2 in ['Ambos os sentidos', 'Volta'] and not volta2.empty:
+            folium.GeoJson(
+                volta2,
+                name=f"Linha {linha_escolhida2} - Volta",
+                style_function=lambda feature: {
+                    "color": "green",
+                    "weight": 4,
+                    "opacity": 0.8,
+                },
+                tooltip=folium.GeoJsonTooltip(
+                    fields=["numero", "nome"],
+                    aliases=["Linha:", "Destino:"],
+                    sticky=True,
+                    labels=True
+                )
+            ).add_to(mapa)
     st_folium(
         mapa,
         width=1100,
@@ -317,9 +373,10 @@ with col_mapa:
 
 with col_info:
     st.subheader("Análise do risco associado à linha no período escolhido")
+    if not linha_foi_escolhida and not linha_escolhida2:
+        st.write("Selecione uma linha de ônibus no menu para obter o risco associado")
     if linha_foi_escolhida:
         dados_linha = risco_por_linha[risco_por_linha['numero'] == linha_escolhida]
-        print(dados_linha)
         if not dados_linha.empty:
             nota = dados_linha['nota_risco'].values[0]
             total_roubos = dados_linha['exposicao_roubo_total'].values[0]
@@ -332,6 +389,17 @@ with col_info:
 
         else:
             st.warning("Não há dados para essa rota!")
+    if linha_foi_escolhida2:
+        dados_linha2 = risco_por_linha[risco_por_linha['numero'] == linha_escolhida2]
+        if not dados_linha2.empty:
+            nota2 = dados_linha2['nota_risco'].values[0]
+            total_roubos2 = dados_linha2['exposicao_roubo_total'].values[0]
 
-    else:
-        st.write("Selecione uma linha de onibus no menu para obter o risco associado")
+            st.write(f"Linha selecionada: {linha_escolhida2}")
+            st.metric(label="Nível de Risco(1 a 5)", value = int(nota2))
+            st.metric(label="Exposição total de roubos nas CISPs da Rota: ", value=int(total_roubos2))
+
+            st.write("A nota de risco foi calculada fazendo o somatório de roubos a coletivos registrados nas CISPs por onde a linha de ônibus passa durante todo o seu trajeto.")
+
+        else:
+            st.warning("Não há dados para essa rota!")
